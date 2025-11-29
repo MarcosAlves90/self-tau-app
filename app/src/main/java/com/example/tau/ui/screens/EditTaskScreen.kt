@@ -47,8 +47,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import com.example.tau.data.Discipline
-import com.example.tau.data.TaskRequest
-import com.example.tau.data.api.RetrofitClient
 import com.example.tau.data.local.UserDao
 import com.example.tau.ui.Strings
 import com.example.tau.ui.components.ErrorDialog
@@ -70,21 +68,21 @@ fun EditTaskScreen(
     var title by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
     var completed by remember { mutableStateOf(false) }
-    var disciplineId by remember { mutableStateOf(0) }
-    var expirationDate by remember { mutableStateOf("") }
     var disciplineName by remember { mutableStateOf("") }
-    var showDatePicker by remember { mutableStateOf(false) }
     var selectedDateMillis by remember { mutableStateOf<Long?>(null) }
     var selectedDisciplineId by remember { mutableStateOf("") }
     var disciplines by remember { mutableStateOf<List<Discipline>>(emptyList()) }
+
+    var showDatePicker by remember { mutableStateOf(false) }
     var showDisciplineDialog by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    val context = LocalContext.current
     var showDeleteDialog by remember { mutableStateOf(false) }
+
     var isLoading by remember { mutableStateOf(false) }
     var isLoadingData by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val datePickerState = rememberDatePickerState()
 
     val formattedDate = remember(selectedDateMillis) {
@@ -94,24 +92,45 @@ fun EditTaskScreen(
         } ?: ""
     }
 
-    // Carregar dados da tarefa
+    if (showDatePicker) {
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        selectedDateMillis = datePickerState.selectedDateMillis
+                        showDatePicker = false
+                    }
+                ) {
+                    Text(Strings.DATE_PICKER_CONFIRM_BUTTON, color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDatePicker = false }) {
+                    Text(Strings.DATE_PICKER_DISMISS_BUTTON, color = Color.White)
+                }
+            }
+        ) {
+            DatePicker(state = datePickerState)
+        }
+    }
+
     LaunchedEffect(taskId) {
         isLoadingData = true
         try {
             val userId = UserDao(context).getUserId()
             if (userId == null) {
                 errorMessage = "Sessão expirada. Faça login novamente"
-                isLoadingData = false
                 return@LaunchedEffect
             }
 
             val taskRepository = com.example.tau.data.repository.TaskRepository(context)
             val task = taskRepository.getTaskByLocalId(taskId.toLong())
+
             if (task != null) {
                 title = task.title
                 description = task.description
                 completed = task.completed
-                disciplineId = task.disciplineId
                 selectedDateMillis = task.expirationDate
                 selectedDisciplineId = task.disciplineId.toString()
                 disciplineName = task.disciplineName
@@ -123,7 +142,6 @@ fun EditTaskScreen(
             disciplines = disciplineRepository.getDisciplinesLocal(userId)
         } catch (e: Exception) {
             errorMessage = "Erro ao carregar tarefa: ${e.message}"
-            e.printStackTrace()
         } finally {
             isLoadingData = false
         }
@@ -148,52 +166,59 @@ fun EditTaskScreen(
                             modifier = Modifier.size(28.dp)
                         )
                     }
-                    val saveIconTint = if (title.isNotBlank() && selectedDisciplineId.isNotBlank()) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.surfaceContainerHighest
+
+                    val canSave = title.isNotBlank() &&
+                            selectedDisciplineId.isNotBlank() &&
+                            !isLoading
+                    val saveIconTint =
+                        if (canSave) MaterialTheme.colorScheme.onBackground
+                        else MaterialTheme.colorScheme.surfaceContainerHighest
+
                     IconButton(
                         onClick = {
-                            if (title.isNotBlank() && selectedDisciplineId.isNotBlank() && !isLoading) {
-                                isLoading = true
-                                scope.launch {
-                                    try {
-                                        val userId = UserDao(context).getUserId()
-                                        if (userId == null) {
-                                            errorMessage = "Sessão expirada. Faça login novamente"
-                                            isLoading = false
-                                            return@launch
-                                        }
-
-                                        val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.getDefault())
-                                        val dateString = selectedDateMillis?.let { dateFormat.format(java.util.Date(it)) } ?: dateFormat.format(java.util.Date())
-
-                                        val taskRepository = com.example.tau.data.repository.TaskRepository(context)
-                                        val db = com.example.tau.data.local.AppDatabase(context)
-                                        val localTasks = db.getAllTasks(userId)
-                                        val localTask = localTasks.find { it.id.toString() == taskId }
-
-                                        if (localTask != null) {
-                                            taskRepository.updateTask(
-                                                localId = localTask.id,
-                                                userId = userId,
-                                                title = title,
-                                                description = description.ifBlank { "" },
-                                                status = completed,
-                                                disciplineLocalId = selectedDisciplineId.toLong(),
-                                                expirationDate = dateString
-                                            )
-                                            onSaveClick()
-                                        } else {
-                                            errorMessage = "Tarefa não encontrada"
-                                        }
-                                    } catch (e: Exception) {
-                                        errorMessage = "Erro ao atualizar: ${e.message ?: "Verifique sua internet"}"
-                                        e.printStackTrace()
-                                    } finally {
+                            if (!canSave) return@IconButton
+                            isLoading = true
+                            scope.launch {
+                                try {
+                                    val userId = UserDao(context).getUserId()
+                                    if (userId == null) {
+                                        errorMessage = "Sessão expirada. Faça login novamente"
                                         isLoading = false
+                                        return@launch
                                     }
+
+                                    val dateString =
+                                        buildExpirationDateStringWithMillis(selectedDateMillis)
+
+                                    val taskRepository =
+                                        com.example.tau.data.repository.TaskRepository(context)
+                                    val db = com.example.tau.data.local.AppDatabase(context)
+                                    val localTask =
+                                        db.getAllTasks(userId).find { it.id.toString() == taskId }
+
+                                    if (localTask != null) {
+                                        taskRepository.updateTask(
+                                            localId = localTask.id,
+                                            userId = userId,
+                                            title = title,
+                                            description = description.ifBlank { "" },
+                                            status = completed,
+                                            disciplineLocalId = selectedDisciplineId.toLong(),
+                                            expirationDate = dateString
+                                        )
+                                        onSaveClick()
+                                    } else {
+                                        errorMessage = "Tarefa não encontrada"
+                                    }
+                                } catch (e: Exception) {
+                                    errorMessage =
+                                        "Erro ao atualizar: ${e.message ?: "Verifique sua internet"}"
+                                } finally {
+                                    isLoading = false
                                 }
                             }
                         },
-                        enabled = title.isNotBlank() && selectedDisciplineId.isNotBlank() && !isLoading
+                        enabled = canSave
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Done,
@@ -240,13 +265,15 @@ fun EditTaskScreen(
                         focusedLabelColor = MaterialTheme.colorScheme.onBackground,
                         unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
                         focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent
                     ),
                     textStyle = TextStyle(color = MaterialTheme.colorScheme.onBackground)
                 )
+
                 Spacer(modifier = Modifier.height(8.dp))
                 HorizontalDivider(color = Color.DarkGray)
                 Spacer(modifier = Modifier.height(8.dp))
+
                 TextField(
                     value = description,
                     onValueChange = { description = it },
@@ -262,13 +289,15 @@ fun EditTaskScreen(
                         focusedLabelColor = MaterialTheme.colorScheme.onBackground,
                         unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
                         focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent
                     ),
                     textStyle = TextStyle(color = MaterialTheme.colorScheme.onBackground)
                 )
+
                 Spacer(modifier = Modifier.height(8.dp))
                 HorizontalDivider(color = Color.DarkGray)
                 Spacer(modifier = Modifier.height(8.dp))
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
@@ -284,9 +313,11 @@ fun EditTaskScreen(
                         color = MaterialTheme.colorScheme.onBackground
                     )
                 }
+
                 Spacer(modifier = Modifier.height(8.dp))
                 HorizontalDivider(color = Color.DarkGray)
                 Spacer(modifier = Modifier.height(8.dp))
+
                 Box {
                     TextField(
                         value = formattedDate,
@@ -303,7 +334,7 @@ fun EditTaskScreen(
                             focusedLabelColor = MaterialTheme.colorScheme.onBackground,
                             unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
                             focusedContainerColor = Color.Transparent,
-                            unfocusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent
                         ),
                         textStyle = TextStyle(color = MaterialTheme.colorScheme.onBackground),
                         readOnly = true
@@ -314,10 +345,11 @@ fun EditTaskScreen(
                             .clickable { showDatePicker = true }
                     )
                 }
+
                 Spacer(modifier = Modifier.height(8.dp))
                 HorizontalDivider(color = Color.DarkGray)
                 Spacer(modifier = Modifier.height(8.dp))
-                // Campo de seleção de disciplina
+
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -327,7 +359,9 @@ fun EditTaskScreen(
                         .padding(horizontal = 16.dp),
                     contentAlignment = Alignment.CenterStart
                 ) {
-                    val selectedDisciplineName = disciplines.find { it.id == selectedDisciplineId }?.title ?: disciplineName
+                    val selectedDisciplineName =
+                        disciplines.find { it.id == selectedDisciplineId }?.title
+                            ?: disciplineName
                     if (selectedDisciplineName.isEmpty()) {
                         Text(
                             text = "Disciplina *",
@@ -362,12 +396,12 @@ fun EditTaskScreen(
                             isLoading = true
                             scope.launch {
                                 try {
-                                    val taskRepository = com.example.tau.data.repository.TaskRepository(context)
+                                    val taskRepository =
+                                        com.example.tau.data.repository.TaskRepository(context)
                                     taskRepository.deleteTask(taskId.toLong())
                                     onDeleteClick()
                                 } catch (e: Exception) {
                                     errorMessage = "Erro ao deletar: ${e.message}"
-                                    e.printStackTrace()
                                 } finally {
                                     isLoading = false
                                 }
@@ -426,24 +460,9 @@ fun EditTaskScreen(
     }
 }
 
-private fun formatDateForDisplay(dateString: String): String {
-    val formats = listOf(
-        "yyyy-MM-dd'T'HH:mm:ss.SSSSSS",
-        "yyyy-MM-dd'T'HH:mm:ss.SSS",
-        "yyyy-MM-dd'T'HH:mm:ss",
-    )
-
-    for (format in formats) {
-        try {
-            val sdf = SimpleDateFormat(format, Locale.getDefault())
-            val date = sdf.parse(dateString)
-            if (date != null) {
-                val displayFormat = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
-                return displayFormat.format(date)
-            }
-        } catch (_: Exception) {
-            continue
-        }
-    }
-    return dateString
+private fun buildExpirationDateStringWithMillis(expirationMillis: Long?): String {
+    val dateFormat =
+        SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.getDefault())
+    val date = expirationMillis?.let { java.util.Date(it) } ?: java.util.Date()
+    return dateFormat.format(date)
 }

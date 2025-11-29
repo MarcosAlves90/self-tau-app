@@ -1,5 +1,7 @@
 package com.example.tau.ui.screens
 
+import android.content.Context
+import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -28,7 +30,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import android.util.Log
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -37,9 +38,9 @@ import androidx.compose.ui.unit.dp
 import com.example.tau.data.Task
 import com.example.tau.data.local.UserDao
 import com.example.tau.ui.Strings
-import kotlinx.coroutines.launch
 import com.example.tau.ui.components.PageTopBar
 import com.example.tau.ui.utils.ColorMapper
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -56,29 +57,23 @@ fun TasksScreen(
     var tasks by remember { mutableStateOf<List<Task>>(emptyList()) }
 
     LaunchedEffect(Unit) {
-        try {
-            val userId = UserDao(context).getUserId()
-            Log.d("TasksScreen", "UserId: $userId")
-
-            if (userId == null) {
-                Log.e("TasksScreen", "UserId is null")
-                return@LaunchedEffect
-            }
-
-            tasks = taskRepository.getTasksLocal(userId)
-            Log.d("TasksScreen", "Tasks loaded from local: ${tasks.size} items")
-        } catch (e: Exception) {
-            Log.e("TasksScreen", "Exception loading tasks", e)
-            e.printStackTrace()
-        }
+        tasks = loadTasks(context, taskRepository)
     }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
-        topBar = { PageTopBar(title = Strings.PAGE_TITLE_TASKS, onMenuClick = onMenuClick) },
+        topBar = {
+            PageTopBar(
+                title = Strings.PAGE_TITLE_TASKS,
+                onMenuClick = onMenuClick
+            )
+        },
         floatingActionButton = {
             FloatingActionButton(onClick = onCreateTaskClick) {
-                Icon(Icons.Filled.Add, contentDescription = Strings.CREATE_TASK_BUTTON_DESC)
+                Icon(
+                    imageVector = Icons.Filled.Add,
+                    contentDescription = Strings.CREATE_TASK_BUTTON_DESC
+                )
             }
         }
     ) { innerPadding ->
@@ -90,12 +85,18 @@ fun TasksScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(tasks) { task ->
+            items(
+                items = tasks,
+                key = { it.id }
+            ) { task ->
                 TaskItem(
                     task = task,
                     onTaskUpdate = { updatedTask ->
-                        tasks = tasks.map {
-                            if (it.id == updatedTask.id) updatedTask else it
+                        val mutable = tasks.toMutableList()
+                        val index = mutable.indexOfFirst { it.id == updatedTask.id }
+                        if (index != -1) {
+                            mutable[index] = updatedTask
+                            tasks = mutable.toList()
                         }
                     },
                     onClick = { onTaskClick(task.id) }
@@ -105,6 +106,28 @@ fun TasksScreen(
     }
 }
 
+private fun loadTasks(
+    context: Context,
+    taskRepository: com.example.tau.data.repository.TaskRepository
+): List<Task> {
+    return try {
+        val userId = UserDao(context).getUserId()
+        Log.d("TasksScreen", "UserId: $userId")
+
+        if (userId == null) {
+            Log.e("TasksScreen", "UserId is null")
+            emptyList()
+        } else {
+            val userTasks = taskRepository.getTasksLocal(userId)
+            Log.d("TasksScreen", "Tasks loaded from local: ${userTasks.size} items")
+            userTasks
+        }
+    } catch (e: Exception) {
+        Log.e("TasksScreen", "Exception loading tasks", e)
+        e.printStackTrace()
+        emptyList()
+    }
+}
 
 @Composable
 fun TaskItem(
@@ -113,10 +136,11 @@ fun TaskItem(
     onTaskUpdate: (Task) -> Unit,
     onClick: () -> Unit = {}
 ) {
-    val backgroundColor = ColorMapper.colorNameToColor(task.disciplineColor)
     val context = LocalContext.current
     val taskRepository = remember { com.example.tau.data.repository.TaskRepository(context) }
     val scope = rememberCoroutineScope()
+
+    val backgroundColor = ColorMapper.colorNameToColor(task.disciplineColor)
     var isUpdating by remember { mutableStateOf(false) }
 
     Card(
@@ -135,69 +159,103 @@ fun TaskItem(
                 checked = task.completed,
                 enabled = !isUpdating,
                 onCheckedChange = { newStatus ->
-                    isUpdating = true
                     scope.launch {
-                        try {
-                            val updatedTask = task.copy(completed = newStatus)
-                            onTaskUpdate(updatedTask)
-
-                            val userId = UserDao(context).getUserId()
-                            if (userId != null) {
-                                val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.getDefault())
-                                val dateString = task.expirationDate?.let {
-                                    dateFormat.format(Date(it))
-                                } ?: dateFormat.format(Date())
-
-                                val db = com.example.tau.data.local.AppDatabase(context)
-                                val localTasks = db.getAllTasks(userId)
-                                val localTask = localTasks.find { it.id.toString() == task.id }
-
-                                if (localTask != null) {
-                                    taskRepository.updateTask(
-                                        localId = localTask.id,
-                                        userId = userId,
-                                        title = task.title,
-                                        description = task.description,
-                                        status = newStatus,
-                                        disciplineLocalId = localTask.disciplineId,
-                                        expirationDate = dateString
-                                    )
-                                    Log.d("TaskItem", "Task ${task.id} updated successfully")
-                                }
-                            }
-                        } catch (e: Exception) {
-                            Log.e("TaskItem", "Exception updating task", e)
-                        } finally {
-                            isUpdating = false
-                        }
+                        handleTaskStatusChange(
+                            context = context,
+                            taskRepository = taskRepository,
+                            task = task,
+                            newStatus = newStatus,
+                            onUpdatingChange = { updating -> isUpdating = updating },
+                            onTaskUpdate = onTaskUpdate
+                        )
                     }
                 }
             )
+
             Spacer(modifier = Modifier.padding(horizontal = 8.dp))
+
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = task.disciplineName,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Color.White
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = task.title,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = Color.White
-                )
-                task.expirationDate?.let {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    val sdf = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
-                    Text(
-                        text = "Expira em: ${sdf.format(Date(it))}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.White.copy(alpha = 0.9f)
-                    )
-                }
+                TaskInfo(task = task)
             }
         }
     }
 }
 
+@Composable
+private fun TaskInfo(task: Task) {
+    Text(
+        text = task.disciplineName,
+        style = MaterialTheme.typography.labelMedium,
+        color = Color.White
+    )
 
+    Spacer(modifier = Modifier.height(2.dp))
+
+    Text(
+        text = task.title,
+        style = MaterialTheme.typography.bodyLarge,
+        color = Color.White
+    )
+
+    task.expirationDate?.let { expirationMillis ->
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Text(
+            text = formatExpirationDate(expirationMillis),
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White.copy(alpha = 0.9f)
+        )
+    }
+}
+
+private suspend fun handleTaskStatusChange(
+    context: Context,
+    taskRepository: com.example.tau.data.repository.TaskRepository,
+    task: Task,
+    newStatus: Boolean,
+    onUpdatingChange: (Boolean) -> Unit,
+    onTaskUpdate: (Task) -> Unit
+) {
+    onUpdatingChange(true)
+
+    try {
+        val updatedTask = task.copy(completed = newStatus)
+        onTaskUpdate(updatedTask)
+
+        val userId = UserDao(context).getUserId() ?: return
+        val expirationDateString = buildExpirationDateString(task.expirationDate)
+
+        val db = com.example.tau.data.local.AppDatabase(context)
+        val localTask = db.getAllTasks(userId).find { it.id.toString() == task.id }
+
+        if (localTask != null) {
+            taskRepository.updateTask(
+                localId = localTask.id,
+                userId = userId,
+                title = task.title,
+                description = task.description,
+                status = newStatus,
+                disciplineLocalId = localTask.disciplineId,
+                expirationDate = expirationDateString
+            )
+            Log.d("TaskItem", "Task ${task.id} updated successfully")
+        } else {
+            Log.e("TaskItem", "Local task not found for id=${task.id}")
+        }
+    } catch (e: Exception) {
+        Log.e("TaskItem", "Exception updating task", e)
+    } finally {
+        onUpdatingChange(false)
+    }
+}
+
+private fun buildExpirationDateString(expirationMillis: Long?): String {
+    val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.getDefault())
+    val date = expirationMillis?.let { Date(it) } ?: Date()
+    return dateFormat.format(date)
+}
+
+private fun formatExpirationDate(expirationMillis: Long): String {
+    val displayFormat = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
+    return "Expira em: ${displayFormat.format(Date(expirationMillis))}"
+}

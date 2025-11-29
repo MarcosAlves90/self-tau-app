@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -30,33 +31,36 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
+import com.example.tau.data.Discipline
+import com.example.tau.data.local.UserDao
 import com.example.tau.ui.Strings
+import com.example.tau.ui.components.ErrorDialog
+import com.example.tau.ui.components.LoadingDialog
 import com.example.tau.ui.components.NavTopBar
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.platform.LocalContext
-import com.example.tau.data.local.UserDao
-import kotlinx.coroutines.launch
-import com.example.tau.ui.components.LoadingDialog
-import com.example.tau.ui.components.ErrorDialog
-import com.example.tau.data.Discipline
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CreateTaskScreen(modifier: Modifier = Modifier, onBackClick: () -> Unit, onSaveClick: () -> Unit) {
+fun CreateTaskScreen(
+    modifier: Modifier = Modifier,
+    onBackClick: () -> Unit,
+    onSaveClick: () -> Unit
+) {
     var title by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
     var showDatePicker by remember { mutableStateOf(false) }
@@ -65,11 +69,11 @@ fun CreateTaskScreen(modifier: Modifier = Modifier, onBackClick: () -> Unit, onS
     var selectedDisciplineId by remember { mutableStateOf("") }
     var disciplines by remember { mutableStateOf<List<Discipline>>(emptyList()) }
     var showDisciplineDialog by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    val context = LocalContext.current
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val datePickerState = rememberDatePickerState()
 
     if (showDatePicker) {
@@ -117,10 +121,14 @@ fun CreateTaskScreen(modifier: Modifier = Modifier, onBackClick: () -> Unit, onS
                 title = Strings.PAGE_TITLE_CREATE_TASK,
                 onBackClick = onBackClick
             ) {
-                val saveIconTint = if (title.isNotBlank()) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.surfaceContainerHighest
+                val canSave = title.isNotBlank() && selectedDisciplineId.isNotBlank() && !isLoading
+                val saveIconTint =
+                    if (canSave) MaterialTheme.colorScheme.onBackground
+                    else MaterialTheme.colorScheme.surfaceContainerHighest
+
                 IconButton(
                     onClick = {
-                        if (title.isNotBlank() && !isLoading) {
+                        if (canSave) {
                             isLoading = true
                             scope.launch {
                                 try {
@@ -131,10 +139,10 @@ fun CreateTaskScreen(modifier: Modifier = Modifier, onBackClick: () -> Unit, onS
                                         return@launch
                                     }
 
-                                    val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.getDefault())
-                                    val dateString = selectedDateMillis?.let { dateFormat.format(Date(it)) } ?: dateFormat.format(Date())
+                                    val dateString = buildExpirationDateString(selectedDateMillis)
 
-                                    val taskRepository = com.example.tau.data.repository.TaskRepository(context)
+                                    val taskRepository =
+                                        com.example.tau.data.repository.TaskRepository(context)
                                     taskRepository.createTask(
                                         userId = userId,
                                         title = title,
@@ -146,14 +154,15 @@ fun CreateTaskScreen(modifier: Modifier = Modifier, onBackClick: () -> Unit, onS
 
                                     onSaveClick()
                                 } catch (e: Exception) {
-                                    errorMessage = "Erro de conexão: ${e.message ?: "Verifique sua internet"}"
+                                    errorMessage =
+                                        "Erro de conexão: ${e.message ?: "Verifique sua internet"}"
                                 } finally {
                                     isLoading = false
                                 }
                             }
                         }
                     },
-                    enabled = title.isNotBlank() && selectedDisciplineId.isNotBlank() && !isLoading
+                    enabled = canSave
                 ) {
                     Icon(
                         imageVector = Icons.Filled.Done,
@@ -189,13 +198,15 @@ fun CreateTaskScreen(modifier: Modifier = Modifier, onBackClick: () -> Unit, onS
                     focusedLabelColor = MaterialTheme.colorScheme.onBackground,
                     unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
                     focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent
                 ),
                 textStyle = TextStyle(color = MaterialTheme.colorScheme.onBackground)
             )
+
             Spacer(modifier = Modifier.height(8.dp))
             HorizontalDivider(color = Color.DarkGray)
             Spacer(modifier = Modifier.height(8.dp))
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
@@ -211,9 +222,11 @@ fun CreateTaskScreen(modifier: Modifier = Modifier, onBackClick: () -> Unit, onS
                     color = MaterialTheme.colorScheme.onBackground
                 )
             }
+
             Spacer(modifier = Modifier.height(8.dp))
             HorizontalDivider(color = Color.DarkGray)
             Spacer(modifier = Modifier.height(8.dp))
+
             Box {
                 TextField(
                     value = formattedDate,
@@ -230,7 +243,7 @@ fun CreateTaskScreen(modifier: Modifier = Modifier, onBackClick: () -> Unit, onS
                         focusedLabelColor = MaterialTheme.colorScheme.onBackground,
                         unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
                         focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent
                     ),
                     textStyle = TextStyle(color = MaterialTheme.colorScheme.onBackground),
                     readOnly = true
@@ -241,10 +254,11 @@ fun CreateTaskScreen(modifier: Modifier = Modifier, onBackClick: () -> Unit, onS
                         .clickable { showDatePicker = true }
                 )
             }
+
             Spacer(modifier = Modifier.height(8.dp))
             HorizontalDivider(color = Color.DarkGray)
             Spacer(modifier = Modifier.height(8.dp))
-            // Campo de seleção de disciplina
+
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -254,7 +268,8 @@ fun CreateTaskScreen(modifier: Modifier = Modifier, onBackClick: () -> Unit, onS
                     .padding(horizontal = 16.dp),
                 contentAlignment = Alignment.CenterStart
             ) {
-                val selectedDisciplineName = disciplines.find { it.id == selectedDisciplineId }?.title ?: ""
+                val selectedDisciplineName =
+                    disciplines.find { it.id == selectedDisciplineId }?.title ?: ""
                 if (selectedDisciplineName.isEmpty()) {
                     Text(
                         text = "Disciplina *",
@@ -269,6 +284,7 @@ fun CreateTaskScreen(modifier: Modifier = Modifier, onBackClick: () -> Unit, onS
                     )
                 }
             }
+
             if (showDisciplineDialog) {
                 androidx.compose.material3.AlertDialog(
                     onDismissRequest = { showDisciplineDialog = false },
@@ -292,9 +308,11 @@ fun CreateTaskScreen(modifier: Modifier = Modifier, onBackClick: () -> Unit, onS
                     }
                 )
             }
+
             Spacer(modifier = Modifier.height(8.dp))
             HorizontalDivider(color = Color.DarkGray)
             Spacer(modifier = Modifier.height(8.dp))
+
             TextField(
                 value = description,
                 onValueChange = { description = it },
@@ -310,7 +328,7 @@ fun CreateTaskScreen(modifier: Modifier = Modifier, onBackClick: () -> Unit, onS
                     focusedLabelColor = MaterialTheme.colorScheme.onBackground,
                     unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
                     focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent
                 ),
                 textStyle = TextStyle(color = MaterialTheme.colorScheme.onBackground)
             )
@@ -332,4 +350,10 @@ fun CreateTaskScreen(modifier: Modifier = Modifier, onBackClick: () -> Unit, onS
             buttonText = "Tentar Novamente"
         )
     }
+}
+
+private fun buildExpirationDateString(expirationMillis: Long?): String {
+    val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.getDefault())
+    val date = expirationMillis?.let { Date(it) } ?: Date()
+    return dateFormat.format(date)
 }
